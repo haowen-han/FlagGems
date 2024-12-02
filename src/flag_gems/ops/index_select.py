@@ -41,34 +41,43 @@ def index_select_kernel(
     tl.store(out + out_off, selected, mask=out_mask)
 
 
-def index_select(inp, dim, index):
-    logging.debug("GEMS INDEX SELECT")
-    assert dim >= -inp.ndim and dim < inp.ndim, "Invalid dim"
-    assert index.ndim <= 1, "Index should have dimension 1 or 0"
-    assert ((i >= 0 and i < inp.size(dim)) for i in index), "Index out of range"
+class Index_Select(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx, inp, dim, index):
+        logging.debug("GEMS INDEX SELECT")
+        assert dim >= -inp.ndim and dim < inp.ndim, "Invalid dim"
+        assert index.ndim <= 1, "Index should have dimension 1 or 0"
+        assert ((i >= 0 and i < inp.size(dim)) for i in index), "Index out of range"
 
-    if index.ndim == 0:
-        index = index.unsqueeze(0)
-    dim = dim % inp.ndim
-    inp_shape = list(inp.shape)
-    index_len = index.numel()
+        if index.ndim == 0:
+            index = index.unsqueeze(0)
+        dim = dim % inp.ndim
+        inp_shape = list(inp.shape)
+        index_len = index.numel()
 
-    # with dim_compress
-    inp = dim_compress(inp, dim)
-    N = inp_shape[dim]
-    M = inp.numel() // N
-    out_shape = list(inp.shape)
-    out_shape[inp.ndim - 1] = index_len
-    out = torch.empty(out_shape, dtype=inp.dtype, device=inp.device)
+        # with dim_compress
+        inp = dim_compress(inp, dim)
+        N = inp_shape[dim]
+        M = inp.numel() // N
+        out_shape = list(inp.shape)
+        out_shape[inp.ndim - 1] = index_len
+        out = torch.empty(out_shape, dtype=inp.dtype, device=inp.device)
 
-    grid = lambda meta: (
-        triton.cdiv(M, meta["BLOCK_M"]),
-        triton.cdiv(index_len, meta["BLOCK_N"]),
-    )
-    index_select_kernel[grid](inp, out, M, N, index, index_len)
-    if dim != out.ndim - 1:
-        order = [i for i in range(out.ndim - 1)]
-        order.insert(dim, out.ndim - 1)
-        return out.permute(order)
-    else:
-        return out
+        grid = lambda meta: (
+            triton.cdiv(M, meta["BLOCK_M"]),
+            triton.cdiv(index_len, meta["BLOCK_N"]),
+        )
+        index_select_kernel[grid](inp, out, M, N, index, index_len)
+        if dim != out.ndim - 1:
+            order = [i for i in range(out.ndim - 1)]
+            order.insert(dim, out.ndim - 1)
+            return out.permute(order)
+        else:
+            return out
+
+    # @staticmethod
+    # def backward(ctx, out_grad):
+    #     logging.debug("GEMS TANH BACKWARD")
+    #     (out,) = ctx.saved_tensors
+    #     in_grad = tanh_backward(out, out_grad)
+    #     return in_grad
